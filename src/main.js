@@ -29,9 +29,31 @@ const DEFAULT_SAVE = {
   unlocks: { mash: false, hold: false, shield: false },
 };
 
+// Сховище: localStorage як база; на CrazyGames додатково Data Module —
+// він переживає очищення браузера і синхронізується з акаунтом гравця.
+const storage = {
+  get(key) {
+    try {
+      if (window.CrazyGames && window.CrazyGames.SDK && window.CrazyGames.SDK.data) {
+        const v = window.CrazyGames.SDK.data.getItem(key);
+        if (v !== null && v !== undefined) return v;
+      }
+    } catch { /* фолбек нижче */ }
+    try { return localStorage.getItem(key); } catch { return null; }
+  },
+  set(key, value) {
+    try {
+      if (window.CrazyGames && window.CrazyGames.SDK && window.CrazyGames.SDK.data) {
+        window.CrazyGames.SDK.data.setItem(key, value);
+      }
+    } catch { /* не критично */ }
+    try { localStorage.setItem(key, value); } catch { /* приватний режим */ }
+  },
+};
+
 function loadSave() {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    const raw = storage.get(SAVE_KEY);
     if (!raw) return structuredClone(DEFAULT_SAVE);
     const parsed = JSON.parse(raw);
     return {
@@ -45,11 +67,7 @@ function loadSave() {
 }
 
 function saveSave(save) {
-  try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify(save));
-  } catch {
-    // приватний режим без localStorage — граємо без збереження
-  }
+  storage.set(SAVE_KEY, JSON.stringify(save));
 }
 
 // --- Локалізація ---
@@ -314,10 +332,11 @@ const sfx = {
 // Доступ ззовні — для тестів і mute через Poki/CrazyGames SDK.
 window.sfx = sfx;
 
-// --- Інтеграція порталу (Poki SDK з фолбеком-заглушкою) ---
-// Вимога Poki: гра мусить повністю працювати і без SDK (adblock, локальний запуск,
-// інші портали). Тому всі виклики йдуть через цю обгортку, а не напряму в PokiSDK.
-// portal.log — журнал подій для E2E-тестів.
+// --- Інтеграція порталу (Poki / CrazyGames SDK з фолбеком-заглушкою) ---
+// Вимога обох порталів: гра мусить повністю працювати і без SDK (adblock, локальний
+// запуск). Тому всі виклики йдуть через цю обгортку. Який SDK підключати — вирішує
+// index.html конкретного білда (poki-sdk.js або crazygames-sdk-v3.js), обгортка
+// сама визначає, що є в window. portal.log — журнал подій для E2E-тестів.
 
 function withTimeout(promise, ms, fallback) {
   return Promise.race([
@@ -327,49 +346,74 @@ function withTimeout(promise, ms, fallback) {
 }
 
 const portal = {
-  sdk: null,
+  adapter: 'none',
   log: [],
   mark(e) { this.log.push(e); },
   async init() {
     this.mark('init');
-    if (!window.PokiSDK) {
-      this.mark('no-sdk');
+    if (window.CrazyGames && window.CrazyGames.SDK) {
+      try {
+        await withTimeout(window.CrazyGames.SDK.init(), 5000);
+        this.adapter = 'crazygames';
+        this.mark('initialized-crazygames');
+        return;
+      } catch {
+        this.mark('init-failed');
+        return;
+      }
+    }
+    if (window.PokiSDK) {
+      try {
+        await withTimeout(PokiSDK.init(), 5000);
+        this.adapter = 'poki';
+        PokiSDK.gameLoadingFinished();
+        this.mark('initialized');
+      } catch {
+        this.mark('init-failed');
+      }
       return;
     }
-    try {
-      await withTimeout(PokiSDK.init(), 5000);
-      this.sdk = PokiSDK;
-      PokiSDK.gameLoadingFinished();
-      this.mark('initialized');
-    } catch {
-      this.mark('init-failed');
-    }
+    this.mark('no-sdk');
   },
   gameplayStart() {
     this.mark('gameplayStart');
-    if (this.sdk) this.sdk.gameplayStart();
+    if (this.adapter === 'poki') PokiSDK.gameplayStart();
+    if (this.adapter === 'crazygames') window.CrazyGames.SDK.game.gameplayStart();
   },
   gameplayStop() {
     this.mark('gameplayStop');
-    if (this.sdk) this.sdk.gameplayStop();
+    if (this.adapter === 'poki') PokiSDK.gameplayStop();
+    if (this.adapter === 'crazygames') window.CrazyGames.SDK.game.gameplayStop();
+  },
+  // CrazyGames v3: requestAd(type, callbacks); нагорода = adFinished без adError.
+  cgAd(type) {
+    return new Promise((resolve) => {
+      window.CrazyGames.SDK.ad.requestAd(type, {
+        adStarted: () => { sfx.muted = true; },
+        adFinished: () => resolve(true),
+        adError: () => resolve(false),
+      });
+    });
   },
   async commercialBreak() {
     this.mark('commercialBreak');
-    if (!this.sdk) return;
+    if (this.adapter === 'none') return;
     sfx.muted = true;
     try {
-      await withTimeout(this.sdk.commercialBreak(() => {}), 8000);
+      if (this.adapter === 'poki') await withTimeout(PokiSDK.commercialBreak(() => {}), 8000);
+      if (this.adapter === 'crazygames') await withTimeout(this.cgAd('midgame'), 8000, false);
     } catch { /* реклами може не бути — це ок */ }
     sfx.muted = false;
   },
   // true = нагороду отримано. Без SDK — завжди true, щоб continue працював у dev-режимі.
   async rewardedBreak() {
     this.mark('rewardedBreak');
-    if (!this.sdk) return true;
+    if (this.adapter === 'none') return true;
     sfx.muted = true;
     let ok = false;
     try {
-      ok = !!(await withTimeout(this.sdk.rewardedBreak(() => {}), 10000, false));
+      if (this.adapter === 'poki') ok = !!(await withTimeout(PokiSDK.rewardedBreak(() => {}), 10000, false));
+      if (this.adapter === 'crazygames') ok = !!(await withTimeout(this.cgAd('rewarded'), 10000, false));
     } catch {
       ok = false;
     }
@@ -378,7 +422,6 @@ const portal = {
   },
 };
 window.portal = portal;
-portal.init();
 
 // --- Меню / магазин між забігами ---
 
@@ -863,4 +906,8 @@ const config = {
   scene: [MenuScene, GameScene],
 };
 
-window.game = new Phaser.Game(config);
+// Стартуємо після ініціалізації SDK (з таймаутом усередині init) — щоб Data Module
+// вже був доступний, коли MenuScene читає збереження.
+portal.init().finally(() => {
+  window.game = new Phaser.Game(config);
+});
