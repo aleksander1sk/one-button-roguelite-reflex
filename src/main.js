@@ -385,13 +385,21 @@ const portal = {
     if (this.adapter === 'poki') PokiSDK.gameplayStop();
     if (this.adapter === 'crazygames') window.CrazyGames.SDK.game.gameplayStop();
   },
-  // CrazyGames v3: requestAd(type, callbacks); нагорода = adFinished без adError.
+  // CrazyGames v3: requestAd(type, callbacks). adError = no-fill або реклама недоступна
+  // (напр. Basic Launch) — rewarded у цьому разі все одно дає нагороду: гравця не караємо
+  // за відсутність реклами. Таймаути щедрі: реальна реклама йде 30-60с, це лише анти-завис.
   cgAd(type) {
     return new Promise((resolve) => {
+      // Якщо реклама не почалась за 3с (немає філу / Basic Launch / localhost —
+      // колбеки можуть взагалі не викликатись) — не тримаємо гравця.
+      let started = false;
+      const startGuard = setTimeout(() => {
+        if (!started) resolve(type === 'rewarded');
+      }, 3000);
       window.CrazyGames.SDK.ad.requestAd(type, {
-        adStarted: () => { sfx.muted = true; },
-        adFinished: () => resolve(true),
-        adError: () => resolve(false),
+        adStarted: () => { started = true; clearTimeout(startGuard); sfx.muted = true; },
+        adFinished: () => { clearTimeout(startGuard); resolve(true); },
+        adError: () => { clearTimeout(startGuard); resolve(type === 'rewarded'); },
       });
     });
   },
@@ -400,8 +408,8 @@ const portal = {
     if (this.adapter === 'none') return;
     sfx.muted = true;
     try {
-      if (this.adapter === 'poki') await withTimeout(PokiSDK.commercialBreak(() => {}), 8000);
-      if (this.adapter === 'crazygames') await withTimeout(this.cgAd('midgame'), 8000, false);
+      if (this.adapter === 'poki') await withTimeout(PokiSDK.commercialBreak(() => {}), 90000);
+      if (this.adapter === 'crazygames') await withTimeout(this.cgAd('midgame'), 90000, false);
     } catch { /* реклами може не бути — це ок */ }
     sfx.muted = false;
   },
@@ -412,8 +420,8 @@ const portal = {
     sfx.muted = true;
     let ok = false;
     try {
-      if (this.adapter === 'poki') ok = !!(await withTimeout(PokiSDK.rewardedBreak(() => {}), 10000, false));
-      if (this.adapter === 'crazygames') ok = !!(await withTimeout(this.cgAd('rewarded'), 10000, false));
+      if (this.adapter === 'poki') ok = !!(await withTimeout(PokiSDK.rewardedBreak(() => {}), 90000, false));
+      if (this.adapter === 'crazygames') ok = !!(await withTimeout(this.cgAd('rewarded'), 90000, false));
     } catch {
       ok = false;
     }
