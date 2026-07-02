@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>One-Button Roguelite Reflex</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230a0a12'/%3E%3Ccircle cx='8' cy='8' r='5' fill='%2300ffc8'/%3E%3C/svg%3E" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #0a0a12;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+    }
+    #game-container {
+      box-shadow: 0 0 40px rgba(0, 255, 200, 0.15);
+    }
+  </style>
+</head>
+<body>
+  <div id="game-container"></div>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+  <script src="https://game-cdn.poki.com/scripts/v2/poki-sdk.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>
